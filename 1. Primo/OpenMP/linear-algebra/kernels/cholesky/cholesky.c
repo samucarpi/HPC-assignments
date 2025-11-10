@@ -1,0 +1,224 @@
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <math.h>
+#include <omp.h>
+
+/* Include polybench common header. */
+#include <polybench.h>
+
+/* Include benchmark-specific header. */
+/* Default data type is double, default size is 4000. */
+#include "cholesky.h"
+
+/* Array initialization. */
+
+#ifdef INIT_DEBUG
+  static void init_array(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
+  {
+    int i, j;
+
+    // Inizializza p a 0
+    for (i = 0; i < n; i++)
+      p[i] = 0.0;
+
+    FILE *fp = fopen("matrix_input.txt", "r");
+    if (fp != NULL) {
+      for (i = 0; i < n; i++)
+        for (j = 0; j < n; j++)
+          fscanf(fp, "%lf", &A[i][j]);
+      fclose(fp);
+    }else{
+      exit(1);
+    }
+  }
+#else
+  static void init_array(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
+  {
+    int i, j;
+
+    for (i = 0; i < n; i++)
+    {
+      p[i] = 1.0 / n;
+      for (j = 0; j < n; j++)
+        A[i][j] = 1.0 / n;
+    }
+  }
+#endif
+
+/* DCE code. Must scan the entire live-out data.
+   Can be used also to check the correctness of the output. */
+static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE POLYBENCH_1D(p, N, n))
+{
+  int i, j;
+
+  fprintf(stderr, "\nMATRICE RISULTANTE:\n");
+  for (i = 0; i < n; i++)
+  {
+    for (j = 0; j < n; j++)
+    {
+      fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
+      if (j < n - 1)
+        fprintf(stderr, " ");
+    }
+    fprintf(stderr, "\n");
+  }
+  fprintf(stderr, "\nVALORI DIAGONALI:\n");
+  for (i = 0; i < n; i++)
+  {
+    fprintf(stderr, DATA_PRINTF_MODIFIER, 1/p[i]);
+    if (i < n - 1)
+      fprintf(stderr, " ");
+  }
+  fprintf(stderr, "\n");
+}
+
+/* Main computational kernel. The whole function will be timed,
+   including the call and return. */
+#ifdef SEQUENTIAL
+  static void kernel_cholesky(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
+  {
+    int i, j, k;
+    DATA_TYPE x;
+    for (i = 0; i < _PB_N; ++i)
+    {
+      x = A[i][i];
+      for (j = 0; j <= i - 1; ++j){
+        x -= A[i][j] * A[i][j];
+      }
+      p[i] = 1.0 / sqrt(x);
+      for (j = i + 1; j < _PB_N; ++j)
+      {
+        x = A[i][j];
+        for (k = 0; k <= i - 1; ++k)
+          x -= A[j][k] * A[i][k];
+        A[j][i] = x * p[i];
+      }
+    }
+  }
+#endif
+
+#ifdef REDUCTION
+  static void kernel_cholesky(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
+  {
+    int i, j, k;
+    DATA_TYPE x;
+    int nThreads = omp_get_max_threads();
+    for (i = 0; i < _PB_N; ++i)
+    {
+      x = A[i][i];
+      #pragma omp parallel for reduction(-:x) schedule(static)
+      for (j = 0; j <= i - 1; ++j){
+        x -= A[i][j] * A[i][j];
+      }
+      p[i] = 1.0 / sqrt(x);
+      #pragma omp parallel for private(k,x) schedule(static)
+      for (j = i + 1; j < _PB_N; ++j)
+      {
+        x = A[i][j];
+        for (k = 0; k <= i - 1; ++k)
+          x -= A[j][k] * A[i][k];
+        A[j][i] = x * p[i];
+      }
+    }
+  }
+#endif
+
+#ifdef ACCELERATOR
+  static void kernel_cholesky(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
+  {
+    int i, j, k;
+    DATA_TYPE x;
+    #pragma omp target data map(tofrom: A[0:N][0:N]) map(tofrom: p[0:N])
+    {
+      #pragma omp target
+      {
+        for (i = 0; i < _PB_N; ++i)
+        {
+            x = A[i][i];
+            for (j = 0; j <= i - 1; ++j)
+              x -= A[i][j] * A[i][j];
+            p[i] = 1.0 / sqrt(x);
+          #pragma omp parallel for private(k,x)
+          for (j = i + 1; j < _PB_N; ++j)
+          {
+            x = A[i][j];
+            for (k = 0; k <= i - 1; ++k)
+              x -= A[j][k] * A[i][k];
+            A[j][i] = x * p[i];
+          }
+        }
+      }
+    }
+  }
+#endif
+
+#ifdef TASKS
+  static void kernel_cholesky(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
+  {
+    int i, j, k;
+    DATA_TYPE x;
+    #pragma omp parallel
+    {
+      #pragma omp single
+      {
+        for (i = 0; i < _PB_N; ++i)
+        {
+          #pragma omp task firstprivate(i,j,x)
+          {
+            x = A[i][i];
+            for (j = 0; j <= i - 1; ++j)
+              x -= A[i][j] * A[i][j];
+            p[i] = 1.0 / sqrt(x);
+          }
+          #pragma omp taskwait
+          for (j = i + 1; j < _PB_N; ++j)
+          {
+            #pragma omp task firstprivate(i,j,k,x)
+            {
+            x = A[i][j];
+            for (k = 0; k <= i - 1; ++k)
+              x -= A[j][k] * A[i][k];
+            A[j][i] = x * p[i];
+            }
+          }
+          #pragma omp taskwait
+        }
+      }
+    } 
+  }
+#endif
+
+
+int main(int argc, char **argv)
+{
+  /* Retrieve problem size. */
+  int n = N;
+
+  /* Variable declaration/allocation. */
+  POLYBENCH_2D_ARRAY_DECL(A, DATA_TYPE, N, N, n, n);
+  POLYBENCH_1D_ARRAY_DECL(p, DATA_TYPE, N, n);
+
+  /* Initialize array(s). */
+  init_array(n, POLYBENCH_ARRAY(p), POLYBENCH_ARRAY(A));
+
+  /* Start timer. */
+  polybench_start_instruments;
+
+  /* Run kernel. */
+  kernel_cholesky(n, POLYBENCH_ARRAY(p), POLYBENCH_ARRAY(A));
+
+  /* Stop and print timer. */
+  polybench_stop_instruments;
+  polybench_print_instruments;
+
+  /* Prevent dead-code elimination. All live-out data must be printed
+     by the function call in argument. */
+  polybench_prevent_dce(print_array(n, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(p)));
+
+  /* Be clean. */
+  POLYBENCH_FREE_ARRAY(A);
+  POLYBENCH_FREE_ARRAY(p);
+
+  return 0;
+}
