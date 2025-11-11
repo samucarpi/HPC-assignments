@@ -17,12 +17,10 @@
   static void init_array(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
   {
     int i, j;
-
-    // Inizializza p a 0
     for (i = 0; i < n; i++)
       p[i] = 0.0;
 
-    FILE *fp = fopen("matrix_input.txt", "r");
+    FILE *fp = fopen("custom_matrix.txt", "r");
     if (fp != NULL) {
       for (i = 0; i < n; i++)
         for (j = 0; j < n; j++)
