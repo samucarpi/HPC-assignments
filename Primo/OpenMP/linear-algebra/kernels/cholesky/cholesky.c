@@ -101,7 +101,6 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
   {
     int i, j, k;
     DATA_TYPE x;
-    int nThreads = omp_get_max_threads();
     for (i = 0; i < _PB_N; ++i)
     {
       x = A[i][i];
@@ -127,29 +126,31 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
   {
     int i, j, k;
     DATA_TYPE x;
-    #pragma omp target data map(tofrom: A[0:N][0:N]) map(tofrom: p[0:N])
+    
+    #pragma omp target data map(tofrom: A[0:N][0:N], p[0:N])
     {
-      #pragma omp target
+      for (i = 0; i < _PB_N; ++i)
       {
-        for (i = 0; i < _PB_N; ++i)
+        #pragma omp target teams num_teams(1)
         {
-            x = A[i][i];
-            for (j = 0; j <= i - 1; ++j)
-              x -= A[i][j] * A[i][j];
-            p[i] = 1.0 / sqrt(x);
-          #pragma omp parallel for private(k,x)
-          for (j = i + 1; j < _PB_N; ++j)
-          {
-            x = A[i][j];
-            for (k = 0; k <= i - 1; ++k)
-              x -= A[j][k] * A[i][k];
-            A[j][i] = x * p[i];
-          }
+          x = A[i][i];
+          for (j = 0; j <= i - 1; ++j)
+            x -= A[i][j] * A[i][j];
+          p[i] = 1.0 / sqrt(x);
+        }
+        #pragma omp target teams distribute parallel for private(k,x)
+        for (j = i + 1; j < _PB_N; ++j)
+        {
+          x = A[i][j];
+          for (k = 0; k <= i - 1; ++k)
+            x -= A[j][k] * A[i][k];
+          A[j][i] = x * p[i];
         }
       }
     }
   }
 #endif
+
 
 #ifdef TASKS
   static void kernel_cholesky(int n,DATA_TYPE POLYBENCH_1D(p, N, n),DATA_TYPE POLYBENCH_2D(A, N, N, n, n))
@@ -205,7 +206,6 @@ int main(int argc, char **argv)
 
   /* Run kernel. */
   kernel_cholesky(n, POLYBENCH_ARRAY(p), POLYBENCH_ARRAY(A));
-
   /* Stop and print timer. */
   polybench_stop_instruments;
   polybench_print_instruments;

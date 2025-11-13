@@ -55,7 +55,11 @@ for opt_flag in "${OPTIMIZATION_FLAGS[@]}"; do
   fi
 
   # compilazione
-  CFLAGS_BUILD="-fopenmp -DPOLYBENCH_TIME -D${opt_flag} ${DATASET_DEFINE_OPTION}"
+  if [ "$opt_flag" = "ACCELERATOR" ]; then
+    CFLAGS_BUILD="-fopenmp -fopenmp-targets=nvptx64-nvidia-cuda -DPOLYBENCH_TIME -D${opt_flag} ${DATASET_DEFINE_OPTION}"
+  else
+    CFLAGS_BUILD="-fopenmp -DPOLYBENCH_TIME -D${opt_flag} ${DATASET_DEFINE_OPTION}"
+  fi
   make clean > /dev/null 2>&1
   make CFLAGS="$CFLAGS_BUILD" $EXECUTABLE > /dev/null 2>&1
   if ! make CFLAGS="$CFLAGS_BUILD" $EXECUTABLE > build.log 2>&1; then

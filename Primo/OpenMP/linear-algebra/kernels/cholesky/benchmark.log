@@ -4,31 +4,31 @@ MINI
 --- SEQUENTIAL ---
 ---------------------------------
 Esecuzioni Totali: 5
-Tempo Minimo (Best): 0.000067 s
-Tempo Massimo (Worst): 0.000070 s
-Tempo Medio (Avg):   6.9e-05 s
+Tempo Minimo (Best): 0.000071 s
+Tempo Massimo (Worst): 0.000074 s
+Tempo Medio (Avg):   7.28e-05 s
 ---------------------------------
 
 --- REDUCTION ---
 ---------------------------------
 Esecuzioni Totali: 5
-Tempo Minimo (Best): 0.000175 s
-Tempo Massimo (Worst): 0.000186 s
-Tempo Medio (Avg):   0.0001804 s
+Tempo Minimo (Best): 0.000214 s
+Tempo Massimo (Worst): 0.000223 s
+Tempo Medio (Avg):   0.0002172 s
 ---------------------------------
 
 --- ACCELERATOR ---
 ---------------------------------
 Esecuzioni Totali: 5
-Tempo Minimo (Best): 0.001019 s
-Tempo Massimo (Worst): 0.001136 s
-Tempo Medio (Avg):   0.0010722 s
+Tempo Minimo (Best): 0.166806 s
+Tempo Massimo (Worst): 0.195557 s
+Tempo Medio (Avg):   0.177063 s
 ---------------------------------
 
 --- TASKS ---
 ---------------------------------
 Esecuzioni Totali: 5
-Tempo Minimo (Best): 0.000968 s
-Tempo Massimo (Worst): 0.001112 s
-Tempo Medio (Avg):   0.0010266 s
+Tempo Minimo (Best): 0.000474 s
+Tempo Massimo (Worst): 0.000491 s
+Tempo Medio (Avg):   0.0004822 s
 ---------------------------------
