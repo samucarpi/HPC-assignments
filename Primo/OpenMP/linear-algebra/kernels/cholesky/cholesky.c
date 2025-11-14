@@ -131,14 +131,17 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     {
       for (i = 0; i < _PB_N; ++i)
       {
-        #pragma omp target teams num_teams(1)
-        {
-          x = A[i][i];
-          for (j = 0; j <= i - 1; ++j)
-            x -= A[i][j] * A[i][j];
-          p[i] = 1.0 / sqrt(x);
+        if(i > 0) {
+          #pragma omp target update from(A[i:1][0:i])
         }
-        #pragma omp target teams distribute parallel for private(k,x)
+        x = A[i][i];
+        for (j = 0; j <= i - 1; ++j)
+          x -= A[i][j] * A[i][j];
+        p[i] = 1.0 / sqrt(x);
+
+        #pragma omp target update to(p[i:1])
+
+        #pragma omp target teams distribute parallel for private(k,x) num_teams(((_PB_N-i-1)+127)/128) thread_limit(128)
         for (j = i + 1; j < _PB_N; ++j)
         {
           x = A[i][j];
