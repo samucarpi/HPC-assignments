@@ -25,11 +25,6 @@
 
 # include <stdlib.h>
 
-/* C++ compatibility */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* Array padding. By default, none is used. */
 # ifndef POLYBENCH_PADDING_FACTOR
 /* default: */
@@ -203,8 +198,5 @@ extern void polybench_papi_print();
 /* Function prototypes. */
 extern void* polybench_alloc_data(unsigned long long int n, int elt_size);
 
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* !POLYBENCH_H */
