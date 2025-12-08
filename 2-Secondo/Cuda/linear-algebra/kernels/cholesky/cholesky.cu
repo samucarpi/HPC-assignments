@@ -151,7 +151,7 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
       compute_p<<<1, 1>>>(d_p, d_partialSum, d_A, n, i);
       compute_column<<<dimGrid, dimBlock>>>(d_p, d_A, n, i);
     }
-
+    cudaDeviceSynchronize();
     // Copia risultati da device a host
     cudaMemcpy(&A[0][0], d_A, Asize, cudaMemcpyDeviceToHost); 
     cudaMemcpy(p, d_p, psize, cudaMemcpyDeviceToHost);
@@ -166,22 +166,18 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
 #ifdef OPTIMIZED_v2
 
   __global__ void compute_diagonal(DATA_TYPE* __restrict__ p, DATA_TYPE* __restrict__ A, int n, int i){
-    // Shared memory per somme parziali
     __shared__ DATA_TYPE sharedSum[BLOCK_SIZE];
     int tid = threadIdx.x;
-
-    // Ogni thread calcola la somma parziale dei propri elementi
-    int stride = blockDim.x; // Coalesced access
+    
+    // 1) ogni thread calcola somma parziale con stride (per i > BLOCK_SIZE)
     DATA_TYPE localSum = 0.0;
-    for (int k=tid; k<i; k+=stride){
+    for (int k=tid; k<i; k+=blockDim.x){
       localSum += A[i*n+k]*A[i*n+k];
     }
-    // Ogni thread scrive la propria somma parziale nella shared memory
     sharedSum[tid] = localSum;
-    // Aspetta che tutti i thread abbiano scritto
     __syncthreads();
-
-    // Riduzione finale solo ai primi 32 thread (warp) -> i warp sono sincronizzati implictamente
+    
+    // 2) somma parziale parallela riducendo a 32 valori finali (warp size)
     if (tid<32){
       DATA_TYPE partialSum = 0.0;
       for (int t=tid; t<blockDim.x; t+=32){
@@ -190,62 +186,56 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
       sharedSum[tid] = partialSum;
     }
     __syncthreads();
-
-    // Conclude con la somma finale dei primi 32 thread nel thread 0
+    
+    // 3) somma finale dei 32 valori rimanenti seqnzialmente nel thread 0
     if (tid == 0){
       DATA_TYPE sum = 0.0;
       for (int t=0; t<32; t++){
         sum += sharedSum[t];
       }
-      DATA_TYPE x = A[i*n+i]-sum;
-      p[i] = 1.0/sqrt(x);
+      p[i] = 1.0/sqrt(A[i*n+i] - sum);
     }
   }
 
   __global__ void compute_column(DATA_TYPE* __restrict__ p, DATA_TYPE* __restrict__ A, int n, int i){
-    int j = blockIdx.x*blockDim.x+threadIdx.x;
+    int j = blockIdx.x*blockDim.x+threadIdx.x;  // Ogni thread calcola una colonna j
     int tid = threadIdx.x;
+    __shared__ DATA_TYPE sharedPivotRow[BLOCK_SIZE];   // A[i][0..i-1]
+    __shared__ DATA_TYPE sharedP;                      // p[i]
     
-    // Shared memory per:
-    // - riga pivot A[i][k]
-    // - p[i]
-    __shared__ DATA_TYPE sharedPivotRow[BLOCK_SIZE];
-    __shared__ DATA_TYPE sharedP;
-    
-    // Caricamento p[i] in shared memory
+    // Thread 0 carica p[i] in shared memory
     if (tid == 0){
       sharedP = p[i];
     }
 
-    // x = A[i][j]
+    // Inizializza x = A[i][j] (solo per il triangolo inferiore)
     DATA_TYPE x = 0.0;
     if (j>i && j<n){
       x = A[i*n+j];
     }
     
-    // Loop a tile per sfruttare la shared memory
+    // Tiling sulla riga pivot A[i][k] per sfruttare la shared memory
     for (int tile=0; tile<i; tile+=BLOCK_SIZE){
-      // Caricamento sulla shared memory della riga pivot A[i][k]
+      // Carica tile della riga pivot: tutti i thread collaborano
       int k_curr = tile+tid;
       if (k_curr<i){
         sharedPivotRow[tid] = A[i*n+k_curr];
-      } else {
-        sharedPivotRow[tid] = 0.0;
+      }else{
+        sharedPivotRow[tid] = 0.0;  // Padding per evitare accessi fuori limite
       }
-      // Sincronizzazione per garantire che tutti i dati siano caricati sulla shared memory del blocco
-      __syncthreads();
-      // x -= A[j][k] * A[i][k] usando la shared memory su A[i][k]
+      __syncthreads();  // Attende il caricamento completo della riga pivot in shared memory
+      
+      // Ogni thread calcola: x -= Σ A[j][k] * A[i][k] per k nel tile corrente
       if (j>i && j<n){
-        // Numero di elementi validi nel tile corrente
-        int pivotRowSize = min(BLOCK_SIZE,i-tile);
+        int pivotRowSize = min(BLOCK_SIZE,i-tile);  // Numero di elementi validi nel tile corrente
         for (int k=0; k<pivotRowSize; ++k){
-          x -= A[j*n+(tile+k)]*sharedPivotRow[k];
+          x -= A[j*n+(tile+k)]*sharedPivotRow[k];  // A[i][k] da shared memory A[j][k] da global memory
         }
       }
-      // Sincronizzazione prima di caricare il prossimo tile
-      __syncthreads();
+      __syncthreads();  // Attende che tutti i thread abbiano finito di usare la riga pivot corrente
     }
-    // Aggiornamento finale di A[j][i] con p[i] in shared memory
+    
+    // Scrivi risultato finale: A[j][i] = x * p[i]
     if (j>i && j<n){
       A[j*n+i] = x*sharedP;
     }
@@ -262,165 +252,18 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     // Dimensioni griglia e blocco
     dim3 dimBlock(BLOCK_SIZE);
     dim3 dimGrid((n+BLOCK_SIZE-1)/BLOCK_SIZE);
-    // Creazione di streams
-    cudaStream_t streams[STREAMS_SIZE];
-    for (int s=0; s<STREAMS_SIZE; s++) {
-      cudaStreamCreate(&streams[s]);
-    }
-
     for (int i=0; i<n; ++i) {
-      // Seleziona stream -> round-robin
-      int streamID = i%STREAMS_SIZE;
-      // Sincronizza lo stream prima di riutilizzarlo per garantire che l'iterazione i-STREAMS_SIZE sia completata
-      if (i >= STREAMS_SIZE) {
-        cudaStreamSynchronize(streams[streamID]);
-      }
       // dimGrid = 1 per avere la shared memory condivisa per tutti i thread del blocco. Computa anche elementi > BLOCK_SIZE grazie al loop stride.
       // La dimensione della shared memory è statica e definita da BLOCK_SIZE all'interno dei kernel.
-      compute_diagonal<<<1, dimBlock, 0, streams[streamID]>>>(d_p, d_A, n, i); 
-      compute_column<<<dimGrid, dimBlock, 0, streams[streamID]>>>(d_p, d_A, n, i);
+      compute_diagonal<<<1, dimBlock>>>(d_p, d_A, n, i); 
+      compute_column<<<dimGrid, dimBlock>>>(d_p, d_A, n, i);
     }
-
     // Sincronizza tutti gli stream per garantire il completamento di tutte le operazioni
     cudaDeviceSynchronize();
     // Copia risultati da device a host
     cudaMemcpy(&A[0][0], d_A, Asize, cudaMemcpyDeviceToHost);
     cudaMemcpy(p, d_p, psize, cudaMemcpyDeviceToHost);
-
-    // Clean up streams e memoria
-    for (int s=0; s<STREAMS_SIZE; s++) {
-      cudaStreamDestroy(streams[s]);
-    }
     cudaFree(d_p);
-    cudaFree(d_A);
-  }
-#endif
-
-#ifdef OPTIMIZED_v3
-
-  __global__ void compute_diagonal(DATA_TYPE* __restrict__ A, int n, int i){
-    // Shared memory per somme parziali
-    __shared__ DATA_TYPE sharedSum[BLOCK_SIZE];
-    int tid = threadIdx.x;
-
-    // Ogni thread calcola la somma parziale dei propri elementi
-    int stride = blockDim.x; // Coalesced access
-    DATA_TYPE localSum = 0.0;
-    for (int k=tid; k<i; k+=stride){
-      localSum += A[i*n+k]*A[i*n+k];
-    }
-    // Ogni thread scrive la propria somma parziale nella shared memory
-    sharedSum[tid] = localSum;
-    // Aspetta che tutti i thread abbiano scritto
-    __syncthreads();
-
-    // Riduzione finale solo ai primi 32 thread (warp) -> i warp sono sincronizzati implictamente
-    if (tid<32){
-      DATA_TYPE partialSum = 0.0;
-      for (int t=tid; t<blockDim.x; t+=32){
-        partialSum += sharedSum[t];
-      }
-      sharedSum[tid] = partialSum;
-    }
-    __syncthreads();
-
-    // Conclude con la somma finale dei primi 32 thread nel thread 0
-    if (tid == 0){
-      DATA_TYPE sum = 0.0;
-      for (int t=0; t<32; t++){
-        sum += sharedSum[t];
-      }
-      DATA_TYPE x = A[i*n+i]-sum;
-      A[i*n+i] = 1.0/sqrt(x);
-    }
-  }
-
-  __global__ void compute_column(DATA_TYPE* __restrict__ A, int n, int i){
-    int j = blockIdx.x*blockDim.x+threadIdx.x;
-    int tid = threadIdx.x;
-    
-    // Shared memory per:
-    // - riga pivot A[i][k]
-    // - p[i]
-    __shared__ DATA_TYPE sharedPivotRow[BLOCK_SIZE];
-    __shared__ DATA_TYPE sharedDiagonal;
-    
-    // Caricamento p[i] in shared memory
-    if (tid == 0){
-      sharedDiagonal = A[i*n+i];
-    }
-
-    // x = A[i][j]
-    DATA_TYPE x = 0.0;
-    if (j>i && j<n){
-      x = A[i*n+j];
-    }
-    
-    // Loop a tile per sfruttare la shared memory
-    for (int tile=0; tile<i; tile+=BLOCK_SIZE){
-      // Caricamento sulla shared memory della riga pivot A[i][k]
-      int k_curr = tile+tid;
-      if (k_curr<i){
-        sharedPivotRow[tid] = A[i*n+k_curr];
-      } else {
-        sharedPivotRow[tid] = 0.0;
-      }
-      // Sincronizzazione per garantire che tutti i dati siano caricati sulla shared memory del blocco
-      __syncthreads();
-      // x -= A[j][k] * A[i][k] usando la shared memory su A[i][k]
-      if (j>i && j<n){
-        // Numero di elementi validi nel tile corrente
-        int pivotRowSize = min(BLOCK_SIZE,i-tile);
-        for (int k=0; k<pivotRowSize; ++k){
-          x -= A[j*n+(tile+k)]*sharedPivotRow[k];
-        }
-      }
-      // Sincronizzazione prima di caricare il prossimo tile
-      __syncthreads();
-    }
-    // Aggiornamento finale di A[j][i] con p[i] in shared memory
-    if (j>i && j<n){
-      A[j*n+i] = x*sharedDiagonal;
-    }
-  }
-
-  static void kernel_cholesky(int n, DATA_TYPE POLYBENCH_2D(A, N, N, n, n)){
-    DATA_TYPE *d_A;
-    size_t Asize = n*n*sizeof(DATA_TYPE);
-    // Allocazione memoria su device e copia dati
-    cudaMalloc((void **)&d_A, Asize);
-    cudaMemcpy(d_A, &A[0][0], Asize, cudaMemcpyHostToDevice);
-    // Dimensioni griglia e blocco
-    dim3 dimBlock(BLOCK_SIZE);
-    dim3 dimGrid((n+BLOCK_SIZE-1)/BLOCK_SIZE);
-    // Creazione di streams
-    cudaStream_t streams[STREAMS_SIZE];
-    for (int s=0; s<STREAMS_SIZE; s++) {
-      cudaStreamCreate(&streams[s]);
-    }
-
-    for (int i=0; i<n; ++i) {
-      // Seleziona stream -> round-robin
-      int streamID = i%STREAMS_SIZE;
-      // Sincronizza lo stream prima di riutilizzarlo per garantire che l'iterazione i-STREAMS_SIZE sia completata
-      if (i >= STREAMS_SIZE) {
-        cudaStreamSynchronize(streams[streamID]);
-      }
-      // dimGrid = 1 per avere la shared memory condivisa per tutti i thread del blocco. Computa anche elementi > BLOCK_SIZE grazie al loop stride.
-      // La dimensione della shared memory è statica e definita da BLOCK_SIZE all'interno dei kernel.
-      compute_diagonal<<<1, dimBlock, 0, streams[streamID]>>>(d_A, n, i); 
-      compute_column<<<dimGrid, dimBlock, 0, streams[streamID]>>>(d_A, n, i);
-    }
-
-    // Sincronizza tutti gli stream per garantire il completamento di tutte le operazioni
-    cudaDeviceSynchronize();
-    // Copia risultati da device a host
-    cudaMemcpy(&A[0][0], d_A, Asize, cudaMemcpyDeviceToHost);
-
-    // Clean up streams e memoria
-    for (int s=0; s<STREAMS_SIZE; s++) {
-      cudaStreamDestroy(streams[s]);
-    }
     cudaFree(d_A);
   }
 #endif
