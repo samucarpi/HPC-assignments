@@ -1,0 +1,26 @@
+--- DATASET ---
+MINI
+
+--- SEQUENTIAL ---
+---------------------------------
+Esecuzioni Totali: 5
+Tempo Minimo (Best): 0.000074 s
+Tempo Massimo (Worst): 0.000077 s
+Tempo Medio (Avg):   7.52e-05 s
+---------------------------------
+
+--- REDUCTION ---
+---------------------------------
+Esecuzioni Totali: 5
+Tempo Minimo (Best): 0.001073 s
+Tempo Massimo (Worst): 0.002299 s
+Tempo Medio (Avg):   0.001789 s
+---------------------------------
+
+--- ACCELERATOR ---
+---------------------------------
+Esecuzioni Totali: 5
+Tempo Minimo (Best): 0.618258 s
+Tempo Massimo (Worst): 0.716833 s
+Tempo Medio (Avg):   0.680751 s
+---------------------------------

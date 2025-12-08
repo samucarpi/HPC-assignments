@@ -1,0 +1,9 @@
+rm -fr ./build *.exe *.out *~
+mkdir -p build/
+g++                       -O2 -g -I. -I../../../utilities -DPOLYBENCH_TIME -DOPTIMIZED_v1 -DMINI_DATASET -c utils.c -o build/utils.c.o
+mkdir -p build/
+g++                       -O2 -g -I. -I../../../utilities -DPOLYBENCH_TIME -DOPTIMIZED_v1 -DMINI_DATASET -c ../../../utilities/polybench.c -o build/polybench.c.o
+mkdir -p build/
+/usr/local/cuda/bin/nvcc    -O2 -g -I. -I../../../utilities -DPOLYBENCH_TIME -DOPTIMIZED_v1 -DMINI_DATASET -Xcompiler -fopenmp -lineinfo `pkg-config --cflags --libs opencv4` -c cholesky.cu -o build/cholesky.cu.o
+mkdir -p ./
+/usr/local/cuda/bin/nvcc    -O2 -g -I. -I../../../utilities -DPOLYBENCH_TIME -DOPTIMIZED_v1 -DMINI_DATASET -Xcompiler -fopenmp -lineinfo `pkg-config --cflags --libs opencv4` ./build/utils.c.o ./build/polybench.c.o ./build/cholesky.cu.o -o cholesky.exe -lm -lcudart  -lgomp
