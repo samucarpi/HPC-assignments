@@ -61,7 +61,6 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     }
     fprintf(stderr, "\n");
   }
-  #ifndef OPTIMIZED_v3
   fprintf(stderr, "\nVALORI DIAGONALI:\n");
   for (i = 0; i < n; i++)
   {
@@ -69,7 +68,6 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     if (i < n - 1)
       fprintf(stderr, " ");
   }
-  #endif
   fprintf(stderr, "\n");
 }
 
@@ -169,7 +167,7 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     __shared__ DATA_TYPE sharedSum[BLOCK_SIZE];
     int tid = threadIdx.x;
     
-    // 1) ogni thread calcola somma parziale con stride (per i > BLOCK_SIZE)
+    // 1) ogni thread calcola una somma parziale in parallelo con stride (per i > BLOCK_SIZE)
     DATA_TYPE localSum = 0.0;
     for (int k=tid; k<i; k+=blockDim.x){
       localSum += A[i*n+k]*A[i*n+k];
@@ -177,7 +175,7 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     sharedSum[tid] = localSum;
     __syncthreads();
     
-    // 2) somma parziale parallela riducendo a 32 valori finali (warp size)
+    // 2) somma parziale parallela riducendo da i a 32 valori finali (warp size per sincronizzazione implicita)
     if (tid<32){
       DATA_TYPE partialSum = 0.0;
       for (int t=tid; t<blockDim.x; t+=32){
@@ -185,9 +183,8 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
       }
       sharedSum[tid] = partialSum;
     }
-    __syncthreads();
     
-    // 3) somma finale dei 32 valori rimanenti seqnzialmente nel thread 0
+    // 3) somma finale dei 32 valori rimanenti seqenzialmente nel thread 0
     if (tid == 0){
       DATA_TYPE sum = 0.0;
       for (int t=0; t<32; t++){
@@ -198,44 +195,45 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
   }
 
   __global__ void compute_column(DATA_TYPE* __restrict__ p, DATA_TYPE* __restrict__ A, int n, int i){
-    int j = blockIdx.x*blockDim.x+threadIdx.x;  // Ogni thread calcola una colonna j
+    int j = blockIdx.x*blockDim.x+threadIdx.x;  // Ogni thread elabora la riga j
     int tid = threadIdx.x;
-    __shared__ DATA_TYPE sharedPivotRow[BLOCK_SIZE];   // A[i][0..i-1]
-    __shared__ DATA_TYPE sharedP;                      // p[i]
+    __shared__ DATA_TYPE sharedPivotRow[BLOCK_SIZE];  // Shared memory per il tile della riga pivot A[i][0..i-1]
+    __shared__ DATA_TYPE sharedP;                     // Shared memory per p[i]
     
-    // Thread 0 carica p[i] in shared memory
+    // 1) Thread 0 carica p[i] in shared memory
     if (tid == 0){
       sharedP = p[i];
     }
 
-    // Inizializza x = A[i][j] (solo per il triangolo inferiore)
+    // 2) x = A[i][j] inizializzato per il triangolo inferiore
     DATA_TYPE x = 0.0;
     if (j>i && j<n){
       x = A[i*n+j];
     }
-    
-    // Tiling sulla riga pivot A[i][k] per sfruttare la shared memory
+
+    // Tiling della riga pivot di BLOCK_SIZE elementi.
     for (int tile=0; tile<i; tile+=BLOCK_SIZE){
-      // Carica tile della riga pivot: tutti i thread collaborano
-      int k_curr = tile+tid;
+
+      // 3) Caricamento del tile in shared memory
+      int k_curr = tile+tid; // Indice globale dell'elemento da caricare
       if (k_curr<i){
         sharedPivotRow[tid] = A[i*n+k_curr];
       }else{
-        sharedPivotRow[tid] = 0.0;  // Padding per evitare accessi fuori limite
+        sharedPivotRow[tid] = 0.0; // Padding per evitare accessi fuori limite
       }
-      __syncthreads();  // Attende il caricamento completo della riga pivot in shared memory
-      
-      // Ogni thread calcola: x -= Σ A[j][k] * A[i][k] per k nel tile corrente
+      __syncthreads();  // Aspetta che tutti i thread abbiano caricato il loro elemento
+
+      // 4) Calcolo del prodotto scalare parziale
       if (j>i && j<n){
-        int pivotRowSize = min(BLOCK_SIZE,i-tile);  // Numero di elementi validi nel tile corrente
+        int pivotRowSize = min(BLOCK_SIZE,i-tile); // Elementi validi nel tile corrente
         for (int k=0; k<pivotRowSize; ++k){
-          x -= A[j*n+(tile+k)]*sharedPivotRow[k];  // A[i][k] da shared memory A[j][k] da global memory
+          x -= A[j*n+(tile+k)]*sharedPivotRow[k]; // A[j][k] in global memory, A[i][k] in shared memory
         }
       }
-      __syncthreads();  // Attende che tutti i thread abbiano finito di usare la riga pivot corrente
+      __syncthreads();  // Aspetta prima di sovrascrivere sharedPivotRow nel prossimo tile
     }
     
-    // Scrivi risultato finale: A[j][i] = x * p[i]
+    // 5) Scrittura del risultato finale
     if (j>i && j<n){
       A[j*n+i] = x*sharedP;
     }
@@ -284,11 +282,7 @@ int main(int argc, char **argv)
   polybench_start_instruments;
 
   /* Run kernel. */
-  #ifdef OPTIMIZED_v3
-    kernel_cholesky(n, POLYBENCH_ARRAY(A));
-  #else
-    kernel_cholesky(n, POLYBENCH_ARRAY(p), POLYBENCH_ARRAY(A));
-  #endif
+  kernel_cholesky(n, POLYBENCH_ARRAY(p), POLYBENCH_ARRAY(A));
   /* Stop and print timer. */
   polybench_stop_instruments;
   polybench_print_instruments;

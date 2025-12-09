@@ -1,10 +1,18 @@
 --- DATASET ---
-MINI
+EXTRALARGE
 
 --- SEQUENTIAL ---
 ---------------------------------
 Esecuzioni Totali: 5
-Tempo Minimo (Best): 0.000031 s
-Tempo Massimo (Worst): 0.000044 s
-Tempo Medio (Avg):   4.04e-05 s
+Tempo Minimo (Best): 32.210942 s
+Tempo Massimo (Worst): 32.288989 s
+Tempo Medio (Avg):   32.2495 s
+---------------------------------
+
+--- OPTIMIZED_v2 ---
+---------------------------------
+Esecuzioni Totali: 5
+Tempo Minimo (Best): 42.209462 s
+Tempo Massimo (Worst): 43.202963 s
+Tempo Medio (Avg):   42.5661 s
 ---------------------------------
