@@ -11,7 +11,6 @@
 #include "cholesky.h"
 
 #define BLOCK_SIZE 512
-#define STREAMS_SIZE 4
 
 /* Array initialization. */
 #ifdef INIT_DEBUG
@@ -175,7 +174,7 @@ static void print_array(int n,DATA_TYPE POLYBENCH_2D(A, N, N, n, n),DATA_TYPE PO
     sharedSum[tid] = localSum;
     __syncthreads();
     
-    // 2) somma parziale parallela riducendo da i a 32 valori finali (warp size per sincronizzazione implicita)
+    // 2) somma parziale parallela riducendo da BLOCK_SIZE a 32 valori finali (warp size per sincronizzazione implicita)
     if (tid<32){
       DATA_TYPE partialSum = 0.0;
       for (int t=tid; t<blockDim.x; t+=32){
